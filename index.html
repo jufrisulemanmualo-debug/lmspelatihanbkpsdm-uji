@@ -428,24 +428,32 @@ function drawPT(){
 }
 function pForm(id){
  const p=id?DB.users.find(x=>x.id===id):{};
- const f=[['nama','Nama'],['instansi','Instansi'],['kab','Kabupaten/Kota'],['prov','Provinsi'],['username','Username']];
- modal(`<h3 style="margin-top:0">${id?'Edit Peserta':'Tambah Peserta'}</h3><div class="grid">${f.map(([k,l])=>`<div><label>${l}</label><input id="f_${k}" value="${esc(p[k]||'')}"></div>`).join('')}</div>
- <label>Password ${id?'(kosongkan jika tidak diubah)':''}</label><div class="pw"><input id="f_pass" type="password" oninput="document.getElementById('fm').innerHTML=strengthHtml(this.value)"><button type="button" onclick="tgl('f_pass',this)">Tampilkan</button></div><div id="fm"></div>
+ const f=[['nama','Nama Lengkap'],['instansi','Instansi'],['kab','Kabupaten/Kota'],['prov','Provinsi'],['username','Email untuk Login']];
+ modal(`<h3 style="margin-top:0">${id?'Edit Peserta':'Tambah Peserta'}</h3><div class="muted" style="margin-bottom:10px">${id?'Perubahan di sini hanya memperbarui tampilan lokal; penggantian email/password akun Supabase belum tersedia.':'Akun baru akan dibuat di Supabase Auth dan profil peserta disimpan di Supabase.'}</div><div class="grid">${f.map(([k,l])=>`<div><label>${l}</label><input id="f_${k}" ${k==='username'?'type="email" autocomplete="email"':''} value="${esc(p[k]||'')}"></div>`).join('')}</div>
+ <label>Password Awal ${id?'(fitur reset Supabase belum tersedia)':''}</label><div class="pw"><input id="f_pass" type="password" autocomplete="new-password" oninput="document.getElementById('fm').innerHTML=strengthHtml(this.value)"><button type="button" onclick="tgl('f_pass',this)">Tampilkan</button></div><div id="fm"></div>
  <div class="err" id="fe"></div>
  <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn s" onclick="closeM()">Batal</button><button class="btn" onclick="savePeserta('${id||''}')">Simpan</button></div>`);
 }
 async function savePeserta(id){
  const g=k=>$('#f_'+k).value.trim();
- const v={nama:g('nama'),instansi:g('instansi'),kab:g('kab'),prov:g('prov'),username:g('username')},pw=$('#f_pass').value,e=$('#fe');
+ const v={nama:g('nama'),instansi:g('instansi'),kab:g('kab'),prov:g('prov'),username:g('username').toLowerCase()},pw=$('#f_pass').value,e=$('#fe');
  e.textContent='';
  if(Object.values(v).some(x=>!x)){e.textContent='Semua field wajib diisi.';return}
- if(v.username.toLowerCase()==='admin'||DB.users.some(x=>x.username.toLowerCase()===v.username.toLowerCase()&&x.id!==id)){e.textContent='Username sudah digunakan. Silakan gunakan username lain.';return}
- if(!id&&!pw){e.textContent='Password wajib diisi.';return}
- if(pw&&!pwOk(pw)){e.textContent='Password minimal 8 karakter dan harus mengandung huruf dan angka.';return}
- let p=id?DB.users.find(x=>x.id===id):null;
- if(!p){p={id:uid(),role:'peserta',ex:{},kz:{},mod:{},att:{},logs:[],seen:{},fail:0,lock:0};DB.users.push(p)}
- Object.assign(p,v);if(pw)p.pass=await mkPass(pw);
- if(save()){closeM();toast(id?'Data peserta berhasil diperbarui.':'Peserta berhasil ditambahkan.','ok');drawPT()}
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.username)){e.textContent='Masukkan alamat email yang valid.';return}
+ if(!id && !supabaseSession){e.textContent='Sesi Admin Supabase tidak ditemukan. Silakan login ulang.';return}
+ if(!id && DB.users.some(x=>String(x.username||'').toLowerCase()===v.username)){e.textContent='Email sudah ada di daftar lokal. Periksa daftar peserta terlebih dahulu.';return}
+ if(!id&&!pw){e.textContent='Password awal wajib diisi.';return}
+ if(!id&&pw.length<12){e.textContent='Password awal minimal 12 karakter.';return}
+ if(id){e.textContent='Edit peserta belum disinkronkan ke Supabase. Untuk keamanan, pengeditan akun Supabase belum diaktifkan.';return}
+ const btn=document.querySelector('#fe')?.parentElement?.querySelector('button.btn:not(.s)');
+ try{
+  const {data,error}=await supabaseClient.functions.invoke('admin-create-participant',{body:{name:v.nama,email:v.username,password:pw,institution:v.instansi,kabupaten:v.kab,provinsi:v.prov,participant_code:''}});
+  if(error){let msg=error.message||'Permintaan ke Supabase gagal.';try{const c=await error.context?.json?.();if(c?.error)msg=c.error}catch(_){}throw new Error(msg)}
+  if(data?.error)throw new Error(data.error);
+  if(!data?.success)throw new Error('Supabase belum mengonfirmasi pembuatan akun.');
+  const p={id:data.participant.id,role:'peserta',...v,email:v.username,ex:{},kz:{},mod:{},att:{},logs:[],seen:{},fail:0,lock:0,createdInSupabase:true};
+  DB.users.push(p);save();closeM();toast('Akun Supabase berhasil dibuat. Daftar lokal pada browser ini diperbarui.','ok');drawPT();
+ }catch(err){e.textContent=err.message||'Gagal membuat akun peserta. Periksa Edge Function dan hak akses Admin.'}
 }
 function delP(id){const p=DB.users.find(x=>x.id===id);
  modal(`<h3 style="margin-top:0">Hapus Peserta</h3><p>Hapus <b>${esc(p.nama)}</b> beserta seluruh progres, nilai, dan riwayat? Tindakan ini tidak dapat dibatalkan.</p><div class="row" style="justify-content:flex-end"><button class="btn s" onclick="closeM()">Batal</button><button class="btn d" onclick="DB.users=DB.users.filter(x=>x.id!=='${id}');save();closeM();toast('Peserta dihapus.','ok');drawPT()">Hapus</button></div>`)}
