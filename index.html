@@ -340,7 +340,8 @@ async function doLogin(mode){
   const {data:profile,error:profileError}=await supabaseClient.from('profiles').select('*').eq('id',data.user.id).maybeSingle();
   if(profileError) throw profileError;
   if(!profile){await supabaseClient.auth.signOut();supabaseSession=null;throw new Error('Profil pengguna belum ditemukan pada tabel profiles. Minta Admin memeriksa profil akun ini.')}
-  const role=String(profile.role||'').toLowerCase();
+  const dbRole=String(profile.role||'').toLowerCase();
+  const role=dbRole==='participant'?'peserta':dbRole;
   const expected=mode==='admin'?'admin':'peserta';
   if(role!==expected){await supabaseClient.auth.signOut();supabaseSession=null;throw new Error(mode==='admin'?'Akun ini bukan Admin.':'Akun ini bukan Peserta.')}
   const displayUsername=profile.username|| (mode==='peserta'?identifier:(data.user.email||authEmail));
@@ -461,16 +462,25 @@ async function savePeserta(id){
  if(!id && DB.users.some(x=>String(x.username||'').toLowerCase()===v.username)){e.textContent='Username sudah ada di daftar lokal. Gunakan username lain.';return}
  if(!id&&!pw){e.textContent='Password awal wajib diisi.';return}
  if(!id&&pw.length<12){e.textContent='Password awal minimal 12 karakter.';return}
- if(id){e.textContent='Edit peserta belum disinkronkan ke Supabase. Untuk keamanan, pengeditan akun Supabase belum diaktifkan.';return}
  const btn=document.querySelector('#fe')?.parentElement?.querySelector('button.btn:not(.s)');
  try{
+  if(id){
+   if(!supabaseSession){throw new Error('Sesi Admin Supabase tidak ditemukan. Silakan login ulang.')}
+   const {data,error}=await supabaseClient.functions.invoke('admin-update-participant',{body:{participant_id:id,name:v.nama,username:v.username,password:pw||undefined,institution:v.instansi,kabupaten:v.kab,provinsi:v.prov}});
+   if(error){let msg=error.message||'Permintaan pembaruan ke Supabase gagal.';try{const c=await error.context?.json?.();if(c?.error)msg=c.error}catch(_){}throw new Error(msg)}
+   if(data?.error)throw new Error(data.error);
+   if(!data?.success)throw new Error('Supabase belum mengonfirmasi pembaruan akun.');
+   const p=DB.users.find(x=>String(x.id)===String(id));
+   if(p)Object.assign(p,v,{role:'peserta',createdInSupabase:true});
+   save();closeM();toast('Akun peserta berhasil diperbarui di Supabase.','ok');drawPT();return;
+  }
   const {data,error}=await supabaseClient.functions.invoke('admin-create-participant',{body:{name:v.nama,username:v.username,password:pw,institution:v.instansi,kabupaten:v.kab,provinsi:v.prov,participant_code:''}});
   if(error){let msg=error.message||'Permintaan ke Supabase gagal.';try{const c=await error.context?.json?.();if(c?.error)msg=c.error}catch(_){}throw new Error(msg)}
   if(data?.error)throw new Error(data.error);
   if(!data?.success)throw new Error('Supabase belum mengonfirmasi pembuatan akun.');
   const p={id:data.participant.id,role:'peserta',...v,email:null,ex:{},kz:{},mod:{},att:{},logs:[],seen:{},fail:0,lock:0,createdInSupabase:true};
   DB.users.push(p);save();closeM();toast('Akun Supabase berhasil dibuat. Daftar lokal pada browser ini diperbarui.','ok');drawPT();
- }catch(err){e.textContent=err.message||'Gagal membuat akun peserta. Periksa Edge Function dan hak akses Admin.'}
+ }catch(err){e.textContent=err.message||'Gagal menyimpan akun peserta. Periksa Edge Function dan hak akses Admin.'}
 }
 function delP(id){const p=DB.users.find(x=>x.id===id);
  modal(`<h3 style="margin-top:0">Hapus Peserta</h3><p>Hapus <b>${esc(p.nama)}</b> beserta seluruh progres, nilai, dan riwayat? Tindakan ini tidak dapat dibatalkan.</p><div class="row" style="justify-content:flex-end"><button class="btn s" onclick="closeM()">Batal</button><button class="btn d" onclick="DB.users=DB.users.filter(x=>x.id!=='${id}');save();closeM();toast('Peserta dihapus.','ok');drawPT()">Hapus</button></div>`)}
@@ -663,7 +673,9 @@ load();
   if(supabaseSession){
    const {data:profile,error:profileError}=await supabaseClient.from('profiles').select('*').eq('id',supabaseSession.user.id).maybeSingle();
    if(!profileError && profile){
-    U={id:supabaseSession.user.id,username:supabaseSession.user.email||'',nama:profile.nama||profile.full_name||profile.name||supabaseSession.user.email||'Pengguna',role:String(profile.role||'').toLowerCase(),instansi:profile.institution||profile.instansi||'',kab:profile.kabupaten||profile.kab||'',prov:profile.provinsi||profile.prov||'',email:supabaseSession.user.email,logs:[]};
+    const dbRole=String(profile.role||'').toLowerCase();
+    const normalizedRole=dbRole==='participant'?'peserta':dbRole;
+    U={id:supabaseSession.user.id,username:profile.username||supabaseSession.user.email||'',nama:profile.full_name||profile.nama||profile.name||supabaseSession.user.email||'Pengguna',role:normalizedRole,instansi:profile.institution||profile.instansi||'',kab:profile.kabupaten||profile.kab||'',prov:profile.provinsi||profile.prov||'',email:supabaseSession.user.email,logs:[]};
     if(!['admin','peserta'].includes(U.role)){U=null;await supabaseClient.auth.signOut()}
    }else{U=null;await supabaseClient.auth.signOut()}
   }
