@@ -35,6 +35,10 @@ th{background:#f8fafc;color:#475569;white-space:nowrap}
 .err{color:var(--b);font-size:13px;margin-top:6px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
 .modal>div{background:#fff;border-radius:12px;padding:20px;max-width:680px;width:100%;max-height:90vh;overflow:auto}
+.modal.modal-wide>div{max-width:1180px;padding:24px 28px}
+.participant-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 18px}
+@media(max-width:760px){.modal.modal-wide>div{padding:18px}.participant-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.participant-grid{grid-template-columns:1fr}}
 #toasts{position:fixed;right:12px;top:12px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:calc(100vw - 24px)}
 .toast{background:#111827;color:#fff;padding:10px 14px;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,.2);animation:fi .25s}
 .toast.err{background:var(--b)}.toast.ok{background:var(--ok)}.toast.warn{background:var(--w)}
@@ -90,6 +94,9 @@ const SUPABASE_URL='https://qedzrwxfjdpdlzhrzjzy.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY='sb_publishable_BKM7b8tx0IaplJzrxAAe7A_I2sUJG9D';
 const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
 let supabaseSession=null;
+// Peserta memakai username; Supabase Auth tetap memakai email internal yang tidak dipakai untuk korespondensi.
+const usernameToAuthEmail=username=>`${String(username||'').trim().toLowerCase()}@username.lms.invalid`;
+const validUsername=username=>/^[a-z0-9._-]{3,40}$/.test(String(username||'').trim().toLowerCase());
 const L={tesAwal:'Tes Awal',mod1:'Modul 1 – Kode Etik ASN',kuis1:'Kuis Modul 1',vr1:'Tatap Muka Virtual 1',mod2:'Modul 2 – Antikorupsi',kuis2:'Kuis Modul 2',vr2:'Tatap Muka Virtual 2',tesAkhir:'Tes Akhir',laporan:'Laporan Saya'};
 const ORDER=Object.keys(L), STEPS=ORDER.slice(0,8);
 const PER=50, EXAM_MS=120*60000, EXAM_N=30, QUIZ_N=10;
@@ -104,7 +111,7 @@ const pwOk=p=>p.length>=8&&/[A-Za-z]/.test(p)&&/\d/.test(p);
 function strength(p){let s=0;if(p.length>=8)s++;if(/[a-z]/.test(p)&&/[A-Z]/.test(p))s++;if(/\d/.test(p))s++;if(/[^A-Za-z0-9]/.test(p))s++;if(p.length>=12)s++;return s<=2?['Lemah','#b91c1c',33]:s<=4?['Sedang','#b45309',66]:['Kuat','#15803d',100]}
 const strengthHtml=v=>{if(!v)return'';const[t,c,w]=strength(v);return `<div class="bar" style="margin-top:6px"><i style="width:${w}%;background:${c}"></i></div><small style="color:${c}">Kekuatan password: ${t}</small>`};
 function toast(m,t=''){const d=document.createElement('div');d.className='toast '+t;d.textContent=m;$('#toasts').append(d);setTimeout(()=>d.remove(),3800)}
-function modal(h){const m=document.createElement('div');m.className='modal';m.innerHTML='<div>'+h+'</div>';m.onclick=e=>{if(e.target===m)m.remove()};document.body.append(m)}
+function modal(h,wide=false){const m=document.createElement('div');m.className='modal'+(wide?' modal-wide':'');m.innerHTML='<div>'+h+'</div>';m.onclick=e=>{if(e.target===m)m.remove()};document.body.append(m)}
 window.closeM=()=>document.querySelectorAll('.modal').forEach(x=>x.remove());
 window.tgl=(id,b)=>{const el=document.getElementById(id);el.type=el.type==='password'?'text':'password';b.textContent=el.type==='password'?'Tampilkan':'Sembunyikan'};
 
@@ -303,8 +310,8 @@ function landing(mode='home'){
  <div class="choices"><div class="choice"><h3>ADMIN</h3><p>Kelola Pelatihan</p><button class="btn" onclick="landing('admin')">Login Admin</button></div>
  <div class="choice"><h3>PESERTA</h3><p>Ikuti Pelatihan</p><button class="btn" onclick="landing('peserta')">Login Peserta</button></div></div></div></div>`;
  else h=`<div class="landing"><div class="lg"><div class="auth"><h3 style="margin:0 0 4px;color:var(--p)">Login ${mode==='admin'?'Admin':'Peserta'}</h3>
- <div class="muted">Masukkan email dan password akun yang terdaftar di Supabase.</div>
- <label>Email</label><input id="u" type="email" autocomplete="username" inputmode="email">
+ <div class="muted">${mode==='admin'?'Masukkan email dan password Admin yang terdaftar di Supabase.':'Masukkan username dan password peserta yang diberikan Admin.'}</div>
+ <label>${mode==='admin'?'Email':'Username'}</label><input id="u" type="${mode==='admin'?'email':'text'}" autocomplete="username" ${mode==='admin'?'inputmode="email"':'autocapitalize="none" spellcheck="false"'}>
  <label>Password</label><div class="pw"><input id="p" type="password" autocomplete="current-password"><button type="button" onclick="tgl('p',this)">Tampilkan</button></div>
  <div class="err" id="le"></div>
  <div class="row" style="margin-top:16px;justify-content:space-between"><button class="btn" onclick="doLogin('${mode}')">Login</button>
@@ -314,11 +321,20 @@ function landing(mode='home'){
  const pw=$('#p');if(pw)pw.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin(mode)});
 }
 async function doLogin(mode){
- const email=$('#u').value.trim().toLowerCase(),password=$('#p').value,le=$('#le');
+ const identifier=$('#u').value.trim(),password=$('#p').value,le=$('#le');
  le.textContent='';
- if(!email||!password){le.textContent='Masukkan email dan password.';return}
+ if(!identifier||!password){le.textContent=mode==='admin'?'Masukkan email dan password.':'Masukkan username dan password.';return}
+ let authEmail;
+ if(mode==='admin'){
+  authEmail=identifier.toLowerCase();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authEmail)){le.textContent='Masukkan alamat email Admin yang valid.';return}
+ }else{
+  const username=identifier.toLowerCase();
+  if(!validUsername(username)){le.textContent='Username harus 3–40 karakter, menggunakan huruf kecil, angka, titik, garis bawah, atau tanda hubung.';return}
+  authEmail=usernameToAuthEmail(username);
+ }
  try{
-  const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
+  const {data,error}=await supabaseClient.auth.signInWithPassword({email:authEmail,password});
   if(error) throw error;
   supabaseSession=data.session;
   const {data:profile,error:profileError}=await supabaseClient.from('profiles').select('*').eq('id',data.user.id).maybeSingle();
@@ -327,10 +343,11 @@ async function doLogin(mode){
   const role=String(profile.role||'').toLowerCase();
   const expected=mode==='admin'?'admin':'peserta';
   if(role!==expected){await supabaseClient.auth.signOut();supabaseSession=null;throw new Error(mode==='admin'?'Akun ini bukan Admin.':'Akun ini bukan Peserta.')}
-  U={id:data.user.id,username:data.user.email||email,nama:profile.nama||profile.full_name||profile.name||data.user.email||email,role,instansi:profile.institution||profile.instansi||'',kab:profile.kabupaten||profile.kab||'',prov:profile.provinsi||profile.prov||'',email:data.user.email,logs:[]};
+  const displayUsername=profile.username|| (mode==='peserta'?identifier:(data.user.email||authEmail));
+  U={id:data.user.id,username:displayUsername,nama:profile.nama||profile.full_name||profile.name||displayUsername,role,instansi:profile.institution||profile.instansi||'',kab:profile.kabupaten||profile.kab||'',prov:profile.provinsi||profile.prov||'',email:mode==='admin'?data.user.email:null,logs:[]};
   try{sessionStorage.setItem(SK,U.id)}catch(e){}
   toast('Login Supabase berhasil.','ok');S.v='dash';render();
- }catch(err){le.textContent=err.message||'Login gagal. Periksa email, password, dan profil Supabase.';}
+ }catch(err){le.textContent=err.message||'Login gagal. Periksa username/email, password, dan profil Supabase.';}
 }
 function forgot(m){modal(`<h3 style="margin-top:0">Lupa Password</h3><p>${m==='admin'?'Login sebagai Admin lalu buka menu Pengaturan Akun untuk mengganti password. Jika tidak dapat login, hubungi administrator sistem.':'Silakan hubungi Admin pelatihan untuk mereset password Anda melalui menu Daftar Peserta.'}</p><div style="text-align:right"><button class="btn s" onclick="closeM()">Tutup</button></div>`)}
 async function logout(){try{await supabaseClient.auth.signOut()}catch(e){}log('Logout');U=null;supabaseSession=null;try{sessionStorage.removeItem(SK)}catch(e){}S.exam=null;clearInterval(ticker);toast('Anda telah logout.','ok');landing()}
@@ -428,30 +445,30 @@ function drawPT(){
 }
 function pForm(id){
  const p=id?DB.users.find(x=>x.id===id):{};
- const f=[['nama','Nama Lengkap'],['instansi','Instansi'],['kab','Kabupaten/Kota'],['prov','Provinsi'],['username','Email untuk Login']];
- modal(`<h3 style="margin-top:0">${id?'Edit Peserta':'Tambah Peserta'}</h3><div class="muted" style="margin-bottom:10px">${id?'Perubahan di sini hanya memperbarui tampilan lokal; penggantian email/password akun Supabase belum tersedia.':'Akun baru akan dibuat di Supabase Auth dan profil peserta disimpan di Supabase.'}</div><div class="grid">${f.map(([k,l])=>`<div><label>${l}</label><input id="f_${k}" ${k==='username'?'type="email" autocomplete="email"':''} value="${esc(p[k]||'')}"></div>`).join('')}</div>
- <label>Password Awal ${id?'(fitur reset Supabase belum tersedia)':''}</label><div class="pw"><input id="f_pass" type="password" autocomplete="new-password" oninput="document.getElementById('fm').innerHTML=strengthHtml(this.value)"><button type="button" onclick="tgl('f_pass',this)">Tampilkan</button></div><div id="fm"></div>
+ const f=[['nama','Nama Lengkap'],['instansi','Instansi'],['kab','Kabupaten/Kota'],['prov','Provinsi'],['username','Username untuk Login']];
+ modal(`<h3 style="margin-top:0">${id?'Edit Peserta':'Tambah Peserta'}</h3><div class="participant-grid">${f.map(([k,l])=>`<div><label>${k==='nama'?'Nama':k==='username'?'Username':l}</label><input id="f_${k}" ${k==='username'?'type="text" autocomplete="username" autocapitalize="none" spellcheck="false"':''} value="${esc(p[k]||'')}"></div>`).join('')}</div>
+ <label>Password ${id?'(fitur reset Supabase belum tersedia)':''}</label><div class="pw"><input id="f_pass" type="password" autocomplete="new-password" oninput="document.getElementById('fm').innerHTML=strengthHtml(this.value)"><button type="button" onclick="tgl('f_pass',this)">Tampilkan</button></div><div id="fm"></div>
  <div class="err" id="fe"></div>
- <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn s" onclick="closeM()">Batal</button><button class="btn" onclick="savePeserta('${id||''}')">Simpan</button></div>`);
+ <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn s" onclick="closeM()">Batal</button><button class="btn" onclick="savePeserta('${id||''}')">Simpan</button></div>`,true);
 }
 async function savePeserta(id){
  const g=k=>$('#f_'+k).value.trim();
  const v={nama:g('nama'),instansi:g('instansi'),kab:g('kab'),prov:g('prov'),username:g('username').toLowerCase()},pw=$('#f_pass').value,e=$('#fe');
  e.textContent='';
  if(Object.values(v).some(x=>!x)){e.textContent='Semua field wajib diisi.';return}
- if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.username)){e.textContent='Masukkan alamat email yang valid.';return}
+ if(!validUsername(v.username)){e.textContent='Username harus 3–40 karakter: huruf kecil, angka, titik, garis bawah, atau tanda hubung.';return}
  if(!id && !supabaseSession){e.textContent='Sesi Admin Supabase tidak ditemukan. Silakan login ulang.';return}
- if(!id && DB.users.some(x=>String(x.username||'').toLowerCase()===v.username)){e.textContent='Email sudah ada di daftar lokal. Periksa daftar peserta terlebih dahulu.';return}
+ if(!id && DB.users.some(x=>String(x.username||'').toLowerCase()===v.username)){e.textContent='Username sudah ada di daftar lokal. Gunakan username lain.';return}
  if(!id&&!pw){e.textContent='Password awal wajib diisi.';return}
  if(!id&&pw.length<12){e.textContent='Password awal minimal 12 karakter.';return}
  if(id){e.textContent='Edit peserta belum disinkronkan ke Supabase. Untuk keamanan, pengeditan akun Supabase belum diaktifkan.';return}
  const btn=document.querySelector('#fe')?.parentElement?.querySelector('button.btn:not(.s)');
  try{
-  const {data,error}=await supabaseClient.functions.invoke('admin-create-participant',{body:{name:v.nama,email:v.username,password:pw,institution:v.instansi,kabupaten:v.kab,provinsi:v.prov,participant_code:''}});
+  const {data,error}=await supabaseClient.functions.invoke('admin-create-participant',{body:{name:v.nama,username:v.username,password:pw,institution:v.instansi,kabupaten:v.kab,provinsi:v.prov,participant_code:''}});
   if(error){let msg=error.message||'Permintaan ke Supabase gagal.';try{const c=await error.context?.json?.();if(c?.error)msg=c.error}catch(_){}throw new Error(msg)}
   if(data?.error)throw new Error(data.error);
   if(!data?.success)throw new Error('Supabase belum mengonfirmasi pembuatan akun.');
-  const p={id:data.participant.id,role:'peserta',...v,email:v.username,ex:{},kz:{},mod:{},att:{},logs:[],seen:{},fail:0,lock:0,createdInSupabase:true};
+  const p={id:data.participant.id,role:'peserta',...v,email:null,ex:{},kz:{},mod:{},att:{},logs:[],seen:{},fail:0,lock:0,createdInSupabase:true};
   DB.users.push(p);save();closeM();toast('Akun Supabase berhasil dibuat. Daftar lokal pada browser ini diperbarui.','ok');drawPT();
  }catch(err){e.textContent=err.message||'Gagal membuat akun peserta. Periksa Edge Function dan hak akses Admin.'}
 }
@@ -478,7 +495,7 @@ function detail(id){
 }
 
 /* Impor Excel */
-function aImpor(){return `<div class="card"><h3 style="margin-top:0">Impor Peserta Excel</h3><p class="muted">Kolom wajib: Nama, Instansi, Kabupaten/Kota, Provinsi, Username, Password. Format .xlsx, .xls, atau .csv (maks 5 MB). Data bermasalah tidak akan dimasukkan.</p>
+function aImpor(){return `<div class="card"><h3 style="margin-top:0">Impor Peserta Excel</h3><p class="muted">Kolom wajib: Nama, Instansi, Kabupaten/Kota, Provinsi, Username, Password. Username harus unik dan 3–40 karakter. Format .xlsx, .xls, atau .csv (maks 5 MB). Data bermasalah tidak akan dimasukkan.</p>
  <div class="row"><button class="btn s" onclick="dlTpl()">Download Template Excel</button></div>
  <label>Upload File</label><input type="file" id="xf" accept=".xlsx,.xls,.csv" onchange="readXl(this)"></div><div id="xp"></div>`}
 function dlTpl(){
